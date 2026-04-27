@@ -87,6 +87,17 @@
         .blook-count { position: absolute; top: 10px; right: 10px; background: #111; padding: 4px 10px; border-radius: 12px; font-size: 1rem; font-weight: 900; border: 2px solid #333; }
         
         #modal-overlay, #admin-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.8); z-index: 1000; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(5px); }
+        #banned-overlay { position: fixed; inset: 0; background: #0a0a0a; z-index: 9999; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+        .banned-skull { font-size: 8rem; margin-bottom: 1rem; animation: bannedPulse 1.5s ease-in-out infinite; }
+        @keyframes bannedPulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.1); opacity: 0.8; } }
+        .banned-title { font-size: 3.5rem; font-weight: 900; color: #ef4444; margin-bottom: 0.5rem; text-shadow: 0 4px 20px rgba(239,68,68,0.5); font-family: 'Titan One', cursive; }
+        .banned-subtitle { font-size: 1.2rem; color: #94a3b8; margin-bottom: 2rem; max-width: 400px; line-height: 1.6; }
+        .banned-reason-box { background: #1a1a1a; border: 2px solid #ef4444; border-radius: 16px; padding: 1.5rem 2rem; margin-bottom: 2rem; max-width: 450px; }
+        .banned-reason-title { color: #ef4444; font-weight: 900; margin-bottom: 0.5rem; }
+        .banned-reason-text { color: #e2e8f0; font-size: 1rem; line-height: 1.5; }
+        #banned-contact { background: #333; color: #fff; border: none; padding: 12px 32px; border-radius: 12px; font-size: 1rem; font-weight: 900; cursor: pointer; border-bottom: 4px solid #111; transition: 0.1s; }
+        #banned-contact:hover { background: #444; }
+        #banned-contact:active { transform: translateY(4px); border-bottom: 0; }
         #pack-modal, #admin-modal { text-align: center; width: 90%; max-width: 400px; }
         #admin-modal { background: #1e1e1e; padding: 2.5rem; border-radius: 24px; border: 5px solid #10b981; text-align: left; border-bottom: 12px solid #059669; }
         #pack-shaking { font-size: 10rem; animation: shake 0.4s infinite; margin-bottom: 2rem; filter: drop-shadow(0 10px 0 rgba(0,0,0,0.5)); }
@@ -477,6 +488,17 @@
             <button id="logout-btn" class="logout-btn">Logout</button>
         </div>
     </header>
+    <div id="banned-overlay" class="hidden">
+        <div class="banned-skull">&#9760;</div>
+        <div class="banned-title">ACCOUNT BANNED</div>
+        <div class="banned-subtitle">Your account has been permanently suspended for violating our terms of service.</div>
+        <div class="banned-reason-box">
+            <div class="banned-reason-title">Reason for Ban</div>
+            <div class="banned-reason-text" id="banned-reason-text">Violating community guidelines</div>
+        </div>
+        <button id="banned-contact" onclick="window.open('mailto:support@blooket.com','_blank')">Contact Support</button>
+    </div>
+
     <div id="global-luck-banner" class="hidden"></div>
     <div id="everyone-notif-banner" class="hidden"></div>
 
@@ -5208,8 +5230,40 @@
             { cost: 1000000, ms: 86400000, label: '24 hours' }
         ];
 
-        function saveClans() {
+function saveClans() {
             localStorage.setItem('blook_clans', JSON.stringify(clans));
+        }
+        function saveUsers() {
+            localStorage.setItem('blook_users', JSON.stringify(users));
+            syncBroadcast('blook_users');
+            if (window.saveUserToServer && currentUser && users[currentUser]) {
+                window.saveUserToServer(currentUser, users[currentUser]);
+            }
+        }
+
+        function savePosts() {
+            localStorage.setItem('blook_posts', JSON.stringify(communityPosts));
+            syncBroadcast('blook_posts');
+        }
+
+        function saveNewsFeed() {
+            localStorage.setItem('blook_news', JSON.stringify(newsFeedPosts));
+            syncBroadcast('blook_news');
+        }
+
+        function saveChat() {
+            localStorage.setItem('blook_global_chat', JSON.stringify(globalChatMessages));
+            syncBroadcast('blook_global_chat');
+        }
+
+        function saveOnlinePresence() {
+            localStorage.setItem('blook_online_presence', JSON.stringify(onlinePresence));
+            syncBroadcast('blook_online_presence');
+        }
+
+        function saveGlobalLuckBoost() {
+            localStorage.setItem('blook_global_luck_boost', JSON.stringify(globalLuckBoost));
+            syncBroadcast('blook_global_luck_boost');
         }
         function saveUsers() {
             localStorage.setItem('blook_users', JSON.stringify(users));
@@ -5245,41 +5299,129 @@
             } catch (_) {}
         }
 
-        (function initLocalSync() {
-            try {
-                if (typeof BroadcastChannel !== 'function') return;
-                const chan = new BroadcastChannel('bv2t_sync_v1');
-                window.__bv2tSyncChan = chan;
-                chan.onmessage = (ev) => {
-                    const msg = ev && ev.data ? ev.data : null;
-                    if (!msg || msg.t !== 'ls' || !msg.k) return;
-                    // Pull the latest state from localStorage and refresh UI if needed.
+(function initPartySync() {
+            const PARTY_ROOM = 'blooket-clone';
+            let partySocket = null;
+            let reconnectAttempts = 0;
+            
+            function connectParty() {
+                try {
+                    console.log('Connecting to PartyKit...');
+                    partySocket = new WebSocket(`wss://${PARTY_ROOM}.partykit.dev/party/${PARTY_ROOM}`);
+                } catch (e) {
+                    console.error('PartyKit connection error:', e);
+                    setTimeout(connectParty, 3000);
+                    return;
+                }
+                
+                partySocket.onopen = () => {
+                    console.log('Connected to PartyKit server');
+                    reconnectAttempts = 0;
+                };
+                
+                partySocket.onerror = (e) => {
+                    console.error('PartyKit error:', e);
+                };
+                
+                partySocket.onmessage = (ev) => {
                     try {
-                        if (msg.k === 'blook_users') users = JSON.parse(localStorage.getItem('blook_users') || '{}') || {};
-                        if (msg.k === 'blook_global_market') globalMarket = JSON.parse(localStorage.getItem('blook_global_market') || '[]') || [];
-                        if (msg.k === 'blook_clans') clans = JSON.parse(localStorage.getItem('blook_clans') || '{}') || {};
-                        if (msg.k === 'blook_posts') communityPosts = JSON.parse(localStorage.getItem('blook_posts') || '[]') || [];
-                        if (msg.k === 'blook_news') newsFeedPosts = JSON.parse(localStorage.getItem('blook_news') || '[]') || [];
-                        if (msg.k === 'blook_global_chat') globalChatMessages = JSON.parse(localStorage.getItem('blook_global_chat') || '[]') || [];
-                        if (msg.k === 'blook_online_presence') onlinePresence = JSON.parse(localStorage.getItem('blook_online_presence') || '{}') || {};
-                        if (msg.k === 'blook_banned_users') bannedUsers = JSON.parse(localStorage.getItem('blook_banned_users') || '[]') || [];
-                        if (msg.k === 'blook_admin_users') adminUsers = JSON.parse(localStorage.getItem('blook_admin_users') || '[]') || [];
-                        if (msg.k === 'blook_global_luck_boost') globalLuckBoost = JSON.parse(localStorage.getItem('blook_global_luck_boost') || 'null');
+                        const msg = JSON.parse(ev.data);
+                        if (msg.type !== 'sync' || !msg.data) return;
+                        const data = msg.data;
+                        
+                        if (data.users) users = data.users;
+                        if (data.globalMarket) globalMarket = data.globalMarket;
+                        if (data.clans) clans = data.clans;
+                        if (data.posts) communityPosts = data.posts;
+                        if (data.news) newsFeedPosts = data.news;
+                        if (data.chat) globalChatMessages = data.chat;
+                        if (data.bannedUsers) bannedUsers = data.bannedUsers;
+                        if (data.adminUsers) adminUsers = data.adminUsers;
+                        if (data.globalLuckBoost) globalLuckBoost = data.globalLuckBoost;
+                        if (data.onlinePresence) onlinePresence = data.onlinePresence;
+                        
+                        if (currentUser && users && users[currentUser]) {
+                            upC();
+                            updateMailBadge?.();
+                            if (!document.getElementById('v-b')?.classList.contains('hidden')) renderI?.();
+                            if (!document.getElementById('v-g')?.classList.contains('hidden')) renderG?.();
+                            if (!document.getElementById('v-post')?.classList.contains('hidden')) renderPosts?.();
+                            if (!document.getElementById('v-news')?.classList.contains('hidden')) renderNewsFeed?.();
+                            if (!document.getElementById('v-c')?.classList.contains('hidden')) renderClans?.();
+                            if (!document.getElementById('v-t')?.classList.contains('hidden')) renderT?.();
+                            if (!document.getElementById('v-chat')?.classList.contains('hidden')) renderGlobalChat?.();
+                            updateGlobalLuckUi?.();
+                        }
                     } catch (_) {}
-
-                    // Best-effort rerender (only if logged in)
-                    if (currentUser && users && users[currentUser]) {
-                        upC();
-                        updateMailBadge?.();
-                        if (!document.getElementById('v-b')?.classList.contains('hidden')) renderI?.();
-                        if (!document.getElementById('v-g')?.classList.contains('hidden')) renderG?.();
-                        if (!document.getElementById('v-post')?.classList.contains('hidden')) renderPosts?.();
-                        if (!document.getElementById('v-news')?.classList.contains('hidden')) renderNewsFeed?.();
-                        if (!document.getElementById('v-c')?.classList.contains('hidden')) renderClans?.();
-                        if (!document.getElementById('v-t')?.classList.contains('hidden')) renderT?.();
-                        if (!document.getElementById('v-chat')?.classList.contains('hidden')) renderGlobalChat?.();
-                        updateGlobalLuckUi?.();
+                };
+                
+                partySocket.onclose = () => {
+                    console.log('PartyKit disconnected, reconnecting...');
+                    reconnectAttempts++;
+                    setTimeout(connectParty, Math.min(reconnectAttempts * 2000, 30000));
+                };
+            }
+            
+            window.partySync = (key, value) => {
+                if (partySocket?.readyState === WebSocket.OPEN) {
+                    partySocket.send(JSON.stringify({ type: 'update', key, value }));
+                }
+            };
+            
+            window.sendPartyChat = (from, body) => {
+                if (partySocket?.readyState === WebSocket.OPEN) {
+                    partySocket.send(JSON.stringify({ type: 'chat', from, body }));
+                }
+            };
+            
+            window.saveUserToServer = (name, data) => {
+                if (partySocket?.readyState === WebSocket.OPEN) {
+                    partySocket.send(JSON.stringify({ type: 'saveUser', name, ...data }));
+                }
+            };
+            
+            window.loadUserFromServer = (name) => {
+                return new Promise((resolve) => {
+                    if (partySocket?.readyState === WebSocket.OPEN) {
+                        const handler = (ev) => {
+                            try {
+                                const msg = JSON.parse(ev.data);
+                                if (msg.type === 'userData') {
+                                    partySocket.removeEventListener('message', handler);
+                                    resolve(msg.data);
+                                }
+                            } catch (_) {}
+                        };
+                        partySocket.addEventListener('message', handler);
+                        partySocket.send(JSON.stringify({ type: 'getUser', name }));
+                    } else {
+                        resolve(null);
                     }
+                });
+            };
+            
+            connectParty();
+        })();
+        
+        function syncBroadcast(changedKey) {
+            if (window.partySync) {
+                const keyMap = {
+                    'blook_users': 'users',
+                    'blook_global_market': 'globalMarket',
+                    'blook_clans': 'clans',
+                    'blook_posts': 'posts',
+                    'blook_news': 'news',
+                    'blook_global_chat': 'chat',
+                    'blook_banned_users': 'bannedUsers',
+                    'blook_admin_users': 'adminUsers',
+                    'blook_global_luck_boost': 'globalLuckBoost',
+                    'blook_online_presence': 'onlinePresence'
+                };
+                const serverKey = keyMap[changedKey] || changedKey;
+                const data = { users, globalMarket, clans, posts: communityPosts, news: newsFeedPosts, chat: globalChatMessages, bannedUsers, adminUsers, globalLuckBoost, onlinePresence };
+                window.partySync(serverKey, data[serverKey]);
+            }
+        }
                 };
             } catch (_) {}
         })();
@@ -5672,9 +5814,14 @@
             if (body.includes('@everyone') && currentUser.toLowerCase() === OWNER_USERNAME) {
                 showEveryoneNotification(currentUser, body.replace('@everyone', '').trim() || 'Check the chat!');
             }
+            
+            // Use PartyKit if connected, otherwise fall back to API
+            if (window.sendPartyChat) {
+                window.sendPartyChat(currentUser, body);
+            }
             apiPost('/api/chat/global', { body })
                 .then(() => renderGlobalChat())
-                .catch(() => alert('Failed to send message.'));
+                .catch(() => {});
         }
 
         function renderClanChat(clan) {
@@ -7080,7 +7227,21 @@
 
                 // Keep existing client logic working while we migrate more state server-side.
                 if (!users || typeof users !== 'object') users = {};
-                if (!users[u]) users[u] = {};
+                
+                // Try loading from server first
+                let serverUser = null;
+                if (window.loadUserFromServer) {
+                    try {
+                        serverUser = await window.loadUserFromServer(u);
+                    } catch (_) {}
+                }
+                
+                if (serverUser) {
+                    users[u] = serverUser;
+                } else if (!users[u]) {
+                    users[u] = {};
+                }
+                
                 users[u].coins = me.coins;
                 users[u].level = me.level;
                 users[u].luck = me.luck;
@@ -8130,8 +8291,10 @@
             saveAdminUsers();
             saveBannedUsers();
             document.getElementById('adm-ban-name').value = '';
-            if (currentUser === name) document.getElementById('logout-btn').click();
-            alert(name + ' has been banned.');
+            if (currentUser === name) {
+                document.getElementById('banned-reason-text').textContent = 'Account banned by administrator';
+                document.getElementById('banned-overlay').classList.remove('hidden');
+            }
         };
         document.getElementById('adm-b-btn').onclick = () => {
             const inputEl = document.getElementById('adm-b-name');
@@ -8261,8 +8424,8 @@
                 globalChatMessages = globalChatMessages.filter(msg => !isBannedUser(msg.from));
                 saveChat();
                 if (currentUser && isBannedUser(currentUser)) {
-                    alert('Your account has been banned.');
-                    document.getElementById('logout-btn').click();
+                    document.getElementById('banned-reason-text').textContent = 'Account banned by administrator';
+                    document.getElementById('banned-overlay').classList.remove('hidden');
                 }
                 if (!document.getElementById('v-chat').classList.contains('hidden')) renderGlobalChat();
                 if (!document.getElementById('v-p').classList.contains('hidden')) renderP();

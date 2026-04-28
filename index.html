@@ -767,6 +767,7 @@
     </div>
 
     <script src="custom-blooks.js"></script>
+    <script src="https://bv2t-server.onrender.com/socket.io/socket.io.js"></script>
     <script>
         window.onerror = function(msg, url, line, col, error) {
             console.error("Global Error:", msg, "at", line, ":", col);
@@ -5236,8 +5237,8 @@ function saveClans() {
         function saveUsers() {
             localStorage.setItem('blook_users', JSON.stringify(users));
             syncBroadcast('blook_users');
-            if (window.saveUserToServer && currentUser && users[currentUser]) {
-                window.saveUserToServer(currentUser, users[currentUser]);
+            if (window.socketEmit && currentUser && users[currentUser]) {
+                window.socketEmit('saveUser', { name: currentUser, ...users[currentUser] });
             }
         }
 
@@ -5268,6 +5269,9 @@ function saveClans() {
         function saveUsers() {
             localStorage.setItem('blook_users', JSON.stringify(users));
             syncBroadcast('blook_users');
+            if (window.socketEmit && currentUser && users[currentUser]) {
+                window.socketEmit('saveUser', { name: currentUser, ...users[currentUser] });
+            }
         }
 
         function savePosts() {
@@ -5299,127 +5303,76 @@ function saveClans() {
             } catch (_) {}
         }
 
-(function initPartySync() {
-            const PARTY_ROOM = 'bv2t-server';
-            let partySocket = null;
-            let reconnectAttempts = 0;
+(function initSocketSync() {
+            const SERVER_URL = 'https://bv2t-server.onrender.com';
+            let socket = null;
             
-            function connectParty() {
+            function connectSocket() {
                 try {
-                    console.log('Connecting to PartyKit...');
-                    partySocket = new WebSocket(`wss://${PARTY_ROOM}.partykit.dev/party/${PARTY_ROOM}`);
+                    console.log('Connecting to server...');
+                    socket = io(SERVER_URL);
                 } catch (e) {
-                    console.error('PartyKit connection error:', e);
-                    setTimeout(connectParty, 3000);
+                    console.error('Socket connection error:', e);
+                    setTimeout(connectSocket, 3000);
                     return;
                 }
                 
-                partySocket.onopen = () => {
-                    console.log('Connected to PartyKit server');
-                    reconnectAttempts = 0;
-                };
+                socket.on('connect', () => {
+                    console.log('Connected to server');
+                });
                 
-                partySocket.onerror = (e) => {
-                    console.error('PartyKit error:', e);
-                };
-                
-                partySocket.onmessage = (ev) => {
-                    try {
-                        const msg = JSON.parse(ev.data);
-                        if (msg.type !== 'sync' || !msg.data) return;
-                        const data = msg.data;
-                        
-                        if (data.users) users = data.users;
-                        if (data.globalMarket) globalMarket = data.globalMarket;
-                        if (data.clans) clans = data.clans;
-                        if (data.posts) communityPosts = data.posts;
-                        if (data.news) newsFeedPosts = data.news;
-                        if (data.chat) globalChatMessages = data.chat;
-                        if (data.bannedUsers) bannedUsers = data.bannedUsers;
-                        if (data.adminUsers) adminUsers = data.adminUsers;
-                        if (data.globalLuckBoost) globalLuckBoost = data.globalLuckBoost;
-                        if (data.onlinePresence) onlinePresence = data.onlinePresence;
-                        
-                        if (currentUser && users && users[currentUser]) {
-                            upC();
-                            updateMailBadge?.();
-                            if (!document.getElementById('v-b')?.classList.contains('hidden')) renderI?.();
-                            if (!document.getElementById('v-g')?.classList.contains('hidden')) renderG?.();
-                            if (!document.getElementById('v-post')?.classList.contains('hidden')) renderPosts?.();
-                            if (!document.getElementById('v-news')?.classList.contains('hidden')) renderNewsFeed?.();
-                            if (!document.getElementById('v-c')?.classList.contains('hidden')) renderClans?.();
-                            if (!document.getElementById('v-t')?.classList.contains('hidden')) renderT?.();
-                            if (!document.getElementById('v-chat')?.classList.contains('hidden')) renderGlobalChat?.();
-                            updateGlobalLuckUi?.();
-                        }
-                    } catch (_) {}
-                };
-                
-                partySocket.onclose = () => {
-                    console.log('PartyKit disconnected, reconnecting...');
-                    reconnectAttempts++;
-                    setTimeout(connectParty, Math.min(reconnectAttempts * 2000, 30000));
-                };
-            }
-            
-            window.partySync = (key, value) => {
-                if (partySocket?.readyState === WebSocket.OPEN) {
-                    partySocket.send(JSON.stringify({ type: 'update', key, value }));
-                }
-            };
-            
-            window.sendPartyChat = (from, body) => {
-                if (partySocket?.readyState === WebSocket.OPEN) {
-                    partySocket.send(JSON.stringify({ type: 'chat', from, body }));
-                }
-            };
-            
-            window.saveUserToServer = (name, data) => {
-                if (partySocket?.readyState === WebSocket.OPEN) {
-                    partySocket.send(JSON.stringify({ type: 'saveUser', name, ...data }));
-                }
-            };
-            
-            window.loadUserFromServer = (name) => {
-                return new Promise((resolve) => {
-                    if (partySocket?.readyState === WebSocket.OPEN) {
-                        const handler = (ev) => {
-                            try {
-                                const msg = JSON.parse(ev.data);
-                                if (msg.type === 'userData') {
-                                    partySocket.removeEventListener('message', handler);
-                                    resolve(msg.data);
-                                }
-                            } catch (_) {}
-                        };
-                        partySocket.addEventListener('message', handler);
-                        partySocket.send(JSON.stringify({ type: 'getUser', name }));
-                    } else {
-                        resolve(null);
+                socket.on('stateUpdate', (data) => {
+                    if (data.users) users = data.users;
+                    if (data.chat) globalChatMessages = data.chat;
+                    if (data.globalMarket) globalMarket = data.globalMarket;
+                    if (data.onlinePresence) onlinePresence = data.onlinePresence;
+                    
+                    if (currentUser && users && users[currentUser]) {
+                        upC();
+                        updateMailBadge?.();
+                        if (!document.getElementById('v-b')?.classList.contains('hidden')) renderI?.();
+                        if (!document.getElementById('v-g')?.classList.contains('hidden')) renderG?.();
+                        if (!document.getElementById('v-chat')?.classList.contains('hidden')) renderGlobalChat?.();
                     }
                 });
+                
+                socket.on('chat', (msg) => {
+                    if (!isBannedUser(msg.from)) {
+                        globalChatMessages.push(msg);
+                        if (globalChatMessages.length > 800) globalChatMessages = globalChatMessages.slice(-800);
+                        if (!document.getElementById('v-chat')?.classList.contains('hidden')) renderGlobalChat?.();
+                    }
+                });
+                
+                socket.on('fullState', (state) => {
+                    if (state.users) users = state.users;
+                    if (state.chat) globalChatMessages = state.chat;
+                    if (state.globalMarket) globalMarket = state.globalMarket;
+                    if (state.bannedUsers) bannedUsers = state.bannedUsers;
+                    if (state.adminUsers) adminUsers = state.adminUsers;
+                    if (state.market) globalMarket = state.market;
+                });
+                
+                socket.on('disconnect', () => {
+                    console.log('Server disconnected');
+                    setTimeout(connectSocket, 3000);
+                });
+            }
+            
+            window.socketEmit = (event, data) => {
+                if (socket?.connected) socket.emit(event, data);
             };
             
-            connectParty();
+            window.socketOn = (event, handler) => {
+                if (socket?.connected) socket.on(event, handler);
+            };
+            
+            connectSocket();
         })();
         
         function syncBroadcast(changedKey) {
-            if (window.partySync) {
-                const keyMap = {
-                    'blook_users': 'users',
-                    'blook_global_market': 'globalMarket',
-                    'blook_clans': 'clans',
-                    'blook_posts': 'posts',
-                    'blook_news': 'news',
-                    'blook_global_chat': 'chat',
-                    'blook_banned_users': 'bannedUsers',
-                    'blook_admin_users': 'adminUsers',
-                    'blook_global_luck_boost': 'globalLuckBoost',
-                    'blook_online_presence': 'onlinePresence'
-                };
-                const serverKey = keyMap[changedKey] || changedKey;
-                const data = { users, globalMarket, clans, posts: communityPosts, news: newsFeedPosts, chat: globalChatMessages, bannedUsers, adminUsers, globalLuckBoost, onlinePresence };
-                window.partySync(serverKey, data[serverKey]);
+            if (window.socketEmit) {
+                window.socketEmit('update', { key: changedKey, value: eval(changedKey) });
             }
         }
 
@@ -5812,9 +5765,9 @@ function saveClans() {
                 showEveryoneNotification(currentUser, body.replace('@everyone', '').trim() || 'Check the chat!');
             }
             
-            // Use PartyKit if connected, otherwise fall back to API
-            if (window.sendPartyChat) {
-                window.sendPartyChat(currentUser, body);
+            // Use socket server if connected
+            if (window.socketEmit) {
+                window.socketEmit('chat', { from: currentUser, body });
             }
             apiPost('/api/chat/global', { body })
                 .then(() => renderGlobalChat())
@@ -7174,8 +7127,8 @@ function saveClans() {
 
 authSwitch.onclick = () => {
             isSignup = !isSignup;
-            document.getElementById('auth-header').textContent = isSignup ? 'Create Account' : 'BV2T';
-            document.getElementById('auth-desc').textContent = isSignup ? 'Sign up to start your collection' : 'Login to your account';
+            authHeader.textContent = 'BV2T';
+            authDesc.textContent = isSignup ? 'Sign up to start your collection' : 'Login to your account';
             authSubmit.textContent = isSignup ? 'Sign Up' : 'Login';
             authSwitch.innerHTML = isSignup ? 'Already have an account? <span>Login</span>' : 'Don\'t have an account? <span>Sign Up</span>';
             const emailInput = document.getElementById('auth-email');
@@ -7521,6 +7474,9 @@ authSwitch.onclick = () => {
         function saveMarket() {
             localStorage.setItem('blook_global_market', JSON.stringify(globalMarket));
             syncBroadcast('blook_global_market');
+            if (window.socketEmit) {
+                window.socketEmit('update', { key: 'globalMarket', value: globalMarket });
+            }
         }
 
         function promptListMarket(blookName) {
